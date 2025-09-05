@@ -127,5 +127,4 @@ fi
 source ~/.zshrc
 
 # Change default shell to zsh
-echo "Changing shell to zsh..."
-sudo chsh -s "$(which zsh)" "$USER" || echo "chsh failed. Please run 'sudo chsh -s $(which zsh) \"$USER\"' to change shell."
+echo "Please run 'sudo chsh -s $(which zsh) \"$USER\"' to change shell."
