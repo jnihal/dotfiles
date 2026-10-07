@@ -15,7 +15,7 @@ This repository contains my personal dotfiles to quickly set up a consistent and
 Run this on a new machine:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jnihal/dotfiles/main/.term-init.sh) | bash
+curl -fsSL https://raw.githubusercontent.com/jnihal/dotfiles/main/.term-init.sh | bash
 ```
 
 This will:

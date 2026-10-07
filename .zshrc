@@ -24,3 +24,15 @@ alias dotfile="git --git-dir=$HOME/.dotfiles --work-tree=$HOME"
 
 # setup fzf
 source <(fzf --zsh)
+
+# share zsh history
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+
+setopt APPEND_HISTORY       # Append to history file instead of overwriting
+setopt SHARE_HISTORY        # Share history between all open sessions
+setopt INC_APPEND_HISTORY   # Write to the history file immediately, not just when exiting
+
+# machine/work-specific overrides (untracked)
+[[ ! -f ~/.zshrc.local ]] || source ~/.zshrc.local
