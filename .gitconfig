@@ -1,0 +1,12 @@
+# Generic settings only. Identity, work URL rewrites and the delta pager live in
+# ~/.gitconfig.local (untracked; see .term-init.sh and dev-sync).
+[delta]
+	color-only = true
+	tabs = 0
+	pager = less -RFX -x1,5
+[merge]
+	conflictStyle = zdiff3
+
+# Keep last so local settings override the above.
+[include]
+	path = ~/.gitconfig.local

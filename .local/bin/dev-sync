@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# dev-sync: encrypted backup/restore of work-specific files that must not live
+# in the (public) dotfiles repo.
+#
+#   dev-sync backup       tar + encrypt the files in the manifest, push to $DEV_SYNC_DEST
+#   dev-sync restore      pull from $DEV_SYNC_DEST, decrypt, unpack into $HOME
+#                          (files that would be overwritten are moved aside first)
+#   dev-sync list         show what the manifest resolves to
+#   dev-sync schedule     run `backup` daily (launchd on macOS, cron elsewhere)
+#   dev-sync unschedule
+#
+# Settings come from ~/.config/dev-sync/config (shell syntax) or the environment:
+#   DEV_SYNC_DEST        a directory, or [user@]host:dir (rsync/scp)
+#   DEV_SYNC_PASSFILE    file holding the passphrase (chmod 600); required for
+#                         unattended runs. Otherwise DEV_SYNC_PASSPHRASE is used,
+#                         or you are prompted.
+#
+# ~/.config/dev-sync/manifest lists extra paths, one per line, relative to $HOME
+# ('#' starts a comment). It is itself included in the archive, so a restore on a
+# new machine brings it back.
+set -euo pipefail
+
+CONF_DIR="$HOME/.config/dev-sync"
+CONF_FILE="$CONF_DIR/config"
+MANIFEST="$CONF_DIR/manifest"
+CACHE_DIR="$HOME/.cache/dev-sync"
+BACKUP_ROOT="$HOME/.dev-sync-backup"
+ARCHIVE="dev-sync.tar.gz.enc"
+LABEL="com.jnihal.dev-sync"
+DEFAULT_ENTRIES=(.zshrc.local .zprofile.local .gitconfig.local .config/dev-sync/manifest)
+
+die()  { echo "dev-sync: $*" >&2; exit 1; }
+warn() { echo "dev-sync: $*" >&2; }
+log()  { if [ -z "${QUIET:-}" ]; then echo "dev-sync: $*"; fi; }
+
+# The environment wins over the config file.
+env_dest=${DEV_SYNC_DEST:-}
+env_passfile=${DEV_SYNC_PASSFILE:-}
+if [ -f "$CONF_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$CONF_FILE"
+fi
+DEST=${env_dest:-${DEV_SYNC_DEST:-}}
+PASSFILE=${env_passfile:-${DEV_SYNC_PASSFILE:-}}
+DEST=${DEST/#\~/$HOME}
+PASSFILE=${PASSFILE/#\~/$HOME}
+
+need_dest() { [ -n "$DEST" ] || die "DEV_SYNC_DEST is not set (see $CONF_FILE)"; }
+
+# Fills FILES with manifest entries (relative to $HOME) that exist.
+resolve_entries() {
+    FILES=()
+    local raw=("${DEFAULT_ENTRIES[@]}") line e f dup
+    if [ -f "$MANIFEST" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=${line%%#*}
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            if [ -n "$line" ]; then raw+=("$line"); fi
+        done < "$MANIFEST"
+    fi
+    for e in "${raw[@]}"; do
+        e=${e/#\~\//}
+        e=${e#"$HOME"/}
+        case "$e" in
+            /*|..|../*|*/../*) warn "ignoring path outside \$HOME: $e"; continue ;;
+        esac
+        if [ ! -e "$HOME/$e" ] && [ ! -L "$HOME/$e" ]; then
+            if [ -z "${QUIET:-}" ]; then warn "skipping missing: $e"; fi
+            continue
+        fi
+        dup=0
+        for f in ${FILES[@]+"${FILES[@]}"}; do
+            if [ "$f" = "$e" ]; then dup=1; fi
+        done
+        if [ "$dup" -eq 0 ]; then FILES+=("$e"); fi
+    done
+}
+
+PASS_ARG=""
+get_pass() {
+    if [ -n "${DEV_SYNC_PASSPHRASE:-}" ]; then
+        PASS_ARG="env:DEV_SYNC_PASSPHRASE"
+    elif [ -n "$PASSFILE" ]; then
+        [ -r "$PASSFILE" ] || die "passfile not readable: $PASSFILE"
+        if [ -n "$(find "$PASSFILE" -maxdepth 0 -perm -077 2>/dev/null)" ]; then
+            warn "$PASSFILE is accessible by other users; chmod 600 it"
+        fi
+        PASS_ARG="file:$PASSFILE"
+    elif [ -t 0 ]; then
+        local again
+        read -rsp "dev-sync passphrase: " DEV_SYNC_PASSPHRASE; echo >&2
+        if [ "${1:-}" = confirm ]; then
+            read -rsp "confirm passphrase: " again; echo >&2
+            [ "$again" = "$DEV_SYNC_PASSPHRASE" ] || die "passphrases differ"
+        fi
+        export DEV_SYNC_PASSPHRASE
+        PASS_ARG="env:DEV_SYNC_PASSPHRASE"
+    else
+        die "no passphrase: set DEV_SYNC_PASSFILE or DEV_SYNC_PASSPHRASE"
+    fi
+}
+
+# Explicit -md/-iter so archives open the same with OpenSSL 1.1+/3.x and LibreSSL.
+ossl() { openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -salt -pass "$PASS_ARG" "$@"; }
+
+is_remote() {
+    case "$DEST" in
+        /*|./*) return 1 ;;
+        *:*)    return 0 ;;
+        *)      return 1 ;;
+    esac
+}
+
+push() {
+    if is_remote; then
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -q "$1" "${DEST%/}/$ARCHIVE"
+        else
+            scp -q "$1" "${DEST%/}/$ARCHIVE"
+        fi
+    else
+        mkdir -p "$DEST"
+        cp "$1" "$DEST/.$ARCHIVE.tmp"
+        mv "$DEST/.$ARCHIVE.tmp" "$DEST/$ARCHIVE"
+    fi
+}
+
+pull() {
+    if is_remote; then
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -q "${DEST%/}/$ARCHIVE" "$1"
+        else
+            scp -q "${DEST%/}/$ARCHIVE" "$1"
+        fi
+    else
+        [ -f "$DEST/$ARCHIVE" ] || die "no backup found at $DEST/$ARCHIVE"
+        cp "$DEST/$ARCHIVE" "$1"
+    fi
+}
+
+cmd_list() {
+    resolve_entries
+    for f in ${FILES[@]+"${FILES[@]}"}; do echo "$f"; done
+}
+
+cmd_backup() {
+    need_dest
+    resolve_entries
+    [ ${#FILES[@]} -gt 0 ] || die "nothing to back up"
+    get_pass confirm
+    umask 077
+    mkdir -p "$CACHE_DIR"
+    local out="$CACHE_DIR/$ARCHIVE"
+    COPYFILE_DISABLE=1 tar -C "$HOME" --exclude=.DS_Store -czf - -- "${FILES[@]}" \
+        | ossl -out "$out.tmp"
+    mv "$out.tmp" "$out"
+    push "$out"
+    log "backed up ${#FILES[@]} entries to $DEST/$ARCHIVE"
+}
+
+cmd_restore() {
+    need_dest
+    get_pass
+    local bdir n=0 m f rel dst
+    tmp=$(mktemp -d)   # global: the EXIT trap runs after this function returns
+    trap 'rm -rf "$tmp"' EXIT
+    pull "$tmp/$ARCHIVE"
+    ossl -d -in "$tmp/$ARCHIVE" -out "$tmp/plain.tgz" 2>/dev/null \
+        || die "decryption failed (wrong passphrase or corrupt archive)"
+    tar -tzf "$tmp/plain.tgz" > "$tmp/members" || die "archive is corrupt"
+    while IFS= read -r m; do
+        case "$m" in
+            /*|..|../*|*/../*) die "refusing unsafe path in archive: $m" ;;
+        esac
+    done < "$tmp/members"
+
+    mkdir "$tmp/stage"
+    tar -xzf "$tmp/plain.tgz" -C "$tmp/stage"
+    bdir="$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
+    while IFS= read -r f; do
+        rel=${f#./}
+        dst="$HOME/$rel"
+        if [ -e "$dst" ] || [ -L "$dst" ]; then
+            if [ -f "$dst" ] && cmp -s "$tmp/stage/$rel" "$dst"; then continue; fi
+            mkdir -p "$bdir/$(dirname "$rel")"
+            mv "$dst" "$bdir/$rel"
+        fi
+        mkdir -p "$(dirname "$dst")"
+        cp -pP "$tmp/stage/$rel" "$dst"
+        n=$((n + 1))
+    done < <(cd "$tmp/stage" && find . \( -type f -o -type l \))
+
+    log "restored $n files into $HOME"
+    if [ -d "$bdir" ]; then log "previous versions saved in $bdir"; fi
+}
+
+cmd_schedule() {
+    need_dest
+    [ -n "$PASSFILE" ] || die "scheduled runs need DEV_SYNC_PASSFILE in $CONF_FILE"
+    local self
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    mkdir -p "$CACHE_DIR"
+    if [ "$(uname)" = Darwin ]; then
+        local plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+        mkdir -p "$(dirname "$plist")"
+        cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>$self</string><string>backup</string><string>--quiet</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardErrorPath</key><string>$CACHE_DIR/launchd.log</string>
+</dict></plist>
+EOF
+        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        launchctl bootstrap "gui/$(id -u)" "$plist"
+    else
+        command -v crontab >/dev/null 2>&1 \
+            || die "no crontab here (container/minimal VM); run '$self backup' from your own scheduler"
+        { crontab -l 2>/dev/null | grep -v '# dev-sync$' || true
+          echo "0 13 * * * $self backup --quiet >>$CACHE_DIR/cron.log 2>&1 # dev-sync"
+        } | crontab -
+    fi
+    log "scheduled daily backup at 13:00"
+}
+
+cmd_unschedule() {
+    if [ "$(uname)" = Darwin ]; then
+        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+    elif command -v crontab >/dev/null 2>&1; then
+        { crontab -l 2>/dev/null | grep -v '# dev-sync$' || true; } | crontab -
+    fi
+    log "unscheduled"
+}
+
+usage() { sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+cmd=${1:-help}
+if [ $# -gt 0 ]; then shift; fi
+for arg in "$@"; do
+    if [ "$arg" = --quiet ]; then QUIET=1; fi
+done
+
+case "$cmd" in
+    backup)     cmd_backup ;;
+    restore)    cmd_restore ;;
+    list)       cmd_list ;;
+    schedule)   cmd_schedule ;;
+    unschedule) cmd_unschedule ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

@@ -1,17 +1,21 @@
+# Non-login interactive shells (tmux on Linux, containers) still need the PATH set in ~/.zprofile.
+[[ -o login ]] || source ~/.zprofile
+
 # oh-my-zsh
 export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME="powerlevel10k/powerlevel10k"
+if [[ -d $ZSH/custom/themes/powerlevel10k ]]; then
+  ZSH_THEME="powerlevel10k/powerlevel10k"
+else
+  ZSH_THEME="robbyrussell"
+fi
 
 plugins=(
   zsh-autosuggestions
   git-auto-fetch
 )
 
-source $ZSH/oh-my-zsh.sh
-export TERM=xterm-256color
-
-# path setup
-export PATH="$HOME/.fzf/bin:$HOME/bin:/usr/local/bin:$PATH"
+[[ -r $ZSH/oh-my-zsh.sh ]] && source $ZSH/oh-my-zsh.sh
+[[ -n $TMUX ]] || export TERM=xterm-256color
 
 # editor
 export EDITOR=vim
@@ -20,10 +24,10 @@ export EDITOR=vim
 alias dotfile="git --git-dir=$HOME/.dotfiles --work-tree=$HOME"
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+[[ $ZSH_THEME == powerlevel10k/* && -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 
 # setup fzf
-source <(fzf --zsh)
+(( $+commands[fzf] )) && source <(fzf --zsh)
 
 # share zsh history
 HISTFILE=~/.zsh_history
