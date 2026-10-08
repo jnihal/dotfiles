@@ -103,15 +103,6 @@ if [ -z "$PM" ]; then
     warn "no supported package manager found (on macOS install Homebrew first: https://brew.sh)"
 fi
 
-# Optional machine/work-specific hook (e.g. package mirrors). Sourced before any
-# package is installed; it can use $PM, as_root, log and warn. Never tracked.
-TERM_INIT_LOCAL="${TERM_INIT_LOCAL:-$HOME/.term-init.local}"
-if [ -r "$TERM_INIT_LOCAL" ]; then
-    log "Running $TERM_INIT_LOCAL"
-    # shellcheck disable=SC1090
-    . "$TERM_INIT_LOCAL"
-fi
-
 ensure required git zsh curl bash
 ensure optional tmux vim openssl rsync ssh delta
 have git && have zsh && have curl || die "git, zsh and curl are required"

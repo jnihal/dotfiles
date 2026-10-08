@@ -30,11 +30,6 @@ Notes:
 
 - `~/.zshrc.local`, `~/.zprofile.local`: extra shell config and environment
 - `~/.gitconfig.local`: git identity, URL rewrites, delta pager
-- `~/.term-init.local`: optional hook that `.term-init.sh` sources *before* installing
-  packages. Use it for things the install itself depends on, like package mirrors or
-  proxies. It can use `$PM` (package manager), `as_root`, `log` and `warn`. Credentials
-  should come from the environment (for example `docker run -e SOME_TOKEN`), not the file.
-  Override its location with `TERM_INIT_LOCAL=<path>`.
 
 ## Work files
 
@@ -49,14 +44,19 @@ dev-sync restore     # download + decrypt + unpack (existing files saved aside)
 dev-sync schedule    # daily backup via launchd/cron
 ```
 
-On a new work machine or container, restore first so `~/.term-init.local` and the
-other work files are in place, then run the install script. `dev-sync` is a single
-file, so fetch just that (needs `curl` and `openssl`):
+On a new work machine or container, run the install script first, then restore the work
+files. If the machine can only reach package mirrors through a proxy or internal mirror,
+configure that *before* running the install script, since the script itself installs
+packages. `dev-sync` is a single file, so you can also fetch just that (needs `curl` and
+`openssl`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jnihal/dotfiles/main/.local/bin/dev-sync -o /tmp/dev-sync
-DEV_SYNC_DEST=<dest> bash /tmp/dev-sync restore    # prompts for the passphrase
 curl -fsSL https://raw.githubusercontent.com/jnihal/dotfiles/main/.term-init.sh | bash
+DEV_SYNC_DEST=<dest> ~/.local/bin/dev-sync restore    # prompts for the passphrase
+
+# or, without the dotfiles:
+curl -fsSL https://raw.githubusercontent.com/jnihal/dotfiles/main/.local/bin/dev-sync -o /tmp/dev-sync
+DEV_SYNC_DEST=<dest> bash /tmp/dev-sync restore
 ```
 
 ## Managing dotfiles
