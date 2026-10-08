@@ -34,7 +34,7 @@ need_dest() { [ -n "$DEST" ] || die "DEV_SYNC_DEST is not set (see $CONF_FILE)";
 # Fills FILES with manifest entries (relative to $HOME) that exist.
 resolve_entries() {
     FILES=()
-    local raw=("${DEFAULT_ENTRIES[@]}") line e f dup
+    local raw=("${DEFAULT_ENTRIES[@]}") line e f dup expanded
     if [ -f "$MANIFEST" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
             line=${line%%#*}
@@ -49,15 +49,25 @@ resolve_entries() {
         case "$e" in
             /*|..|../*|*/../*) warn "ignoring path outside \$HOME: $e"; continue ;;
         esac
-        if [ ! -e "$HOME/$e" ] && [ ! -L "$HOME/$e" ]; then
-            if [ -z "${QUIET:-}" ]; then warn "skipping missing: $e"; fi
-            continue
-        fi
-        dup=0
-        for f in ${FILES[@]+"${FILES[@]}"}; do
-            if [ "$f" = "$e" ]; then dup=1; fi
+        # Entries with * ? [ are globs, expanded relative to $HOME.
+        expanded=()
+        case "$e" in
+            *[*?[]*)
+                while IFS= read -r f; do expanded+=("${f#"$HOME"/}"); done < <(compgen -G "$HOME/$e" || true)
+                if [ ${#expanded[@]} -eq 0 ] && [ -z "${QUIET:-}" ]; then warn "no match: $e"; fi ;;
+            *) expanded=("$e") ;;
+        esac
+        for e in ${expanded[@]+"${expanded[@]}"}; do
+            if [ ! -e "$HOME/$e" ] && [ ! -L "$HOME/$e" ]; then
+                if [ -z "${QUIET:-}" ]; then warn "skipping missing: $e"; fi
+                continue
+            fi
+            dup=0
+            for f in ${FILES[@]+"${FILES[@]}"}; do
+                if [ "$f" = "$e" ]; then dup=1; fi
+            done
+            if [ "$dup" -eq 0 ]; then FILES+=("$e"); fi
         done
-        if [ "$dup" -eq 0 ]; then FILES+=("$e"); fi
     done
 }
 
@@ -255,6 +265,7 @@ Commands:
 What is backed up (paths relative to $HOME; missing ones are skipped):
   .zshrc.local  .zprofile.local  .gitconfig.local  .config/dev-sync/manifest
   plus every path listed in ~/.config/dev-sync/manifest, one per line ('#' = comment).
+  Globs work, e.g. .claude/projects/*/memory
 
 Setup on the machine that has the files:
   1. Create ~/.config/dev-sync/config:
