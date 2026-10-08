@@ -64,7 +64,8 @@ Save (on the Mac that has the settings you want):
    Later changes are written to the file automatically; commit it again when you want
    to keep them.
 
-Restore (new Mac): quit iTerm2, check out the dotfiles, then run
+Restore (new Mac): `.term-init.sh` does this for you; quit and reopen iTerm2 afterwards.
+By hand (with iTerm2 quit), after checking out the dotfiles:
 
 ```sh
 defaults write com.googlecode.iterm2 PrefsCustomFolder -string "$HOME/.config/iterm2-prefs"

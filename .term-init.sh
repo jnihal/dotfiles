@@ -167,6 +167,19 @@ if have tmux; then
     "$HOME/.tmux/plugins/tpm/bin/install_plugins" >/dev/null 2>&1 || warn "tmux plugin install failed (run prefix + I inside tmux)"
 fi
 
+# ----------------------------------------------------------------- iTerm2 --
+# Point iTerm2 at the tracked settings folder (macOS only, once the dotfiles are in).
+
+ITERM_PREFS="$HOME/.config/iterm2-prefs"
+if [ "$(uname -s)" = Darwin ] && [ -f "$ITERM_PREFS/com.googlecode.iterm2.plist" ]; then
+    if [ "$(defaults read com.googlecode.iterm2 PrefsCustomFolder 2>/dev/null || true)" != "$ITERM_PREFS" ]; then
+        log "iTerm2 settings"
+        defaults write com.googlecode.iterm2 PrefsCustomFolder -string "$ITERM_PREFS"
+        defaults write com.googlecode.iterm2 LoadPrefsFromCustomFolder -bool true
+        if pgrep -x iTerm2 >/dev/null 2>&1; then warn "iTerm2 is running; quit and reopen it to load the settings"; fi
+    fi
+fi
+
 # -------------------------------------------------------------- git (local) --
 # Identity and optional features live in ~/.gitconfig.local, which is never tracked.
 
