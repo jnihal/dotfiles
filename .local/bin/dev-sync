@@ -1,25 +1,6 @@
 #!/usr/bin/env bash
-# dev-sync: encrypted backup/restore of work-specific files that must not live
-# in the (public) dotfiles repo.
-#
-#   dev-sync backup       tar + encrypt the files in the manifest, push to $DEV_SYNC_DEST
-#                          (the previous archive is kept as dev-sync.tar.gz.enc.prev; refuses
-#                          to replace a backup this machine has never restored, unless --force)
-#   dev-sync restore      pull from $DEV_SYNC_DEST, decrypt, unpack into $HOME
-#                          (files that would be overwritten are moved aside first)
-#   dev-sync list         show what the manifest resolves to
-#   dev-sync schedule     run `backup` daily (launchd on macOS, cron elsewhere)
-#   dev-sync unschedule
-#
-# Settings come from ~/.config/dev-sync/config (shell syntax) or the environment:
-#   DEV_SYNC_DEST        a directory, or [user@]host:dir (rsync/scp)
-#   DEV_SYNC_PASSFILE    file holding the passphrase (chmod 600); required for
-#                         unattended runs. Otherwise DEV_SYNC_PASSPHRASE is used,
-#                         or you are prompted.
-#
-# ~/.config/dev-sync/manifest lists extra paths, one per line, relative to $HOME
-# ('#' starts a comment). It is itself included in the archive, so a restore on a
-# new machine brings it back.
+# dev-sync: encrypted backup/restore of work-only files that must not live in the
+# (public) dotfiles repo. Run `dev-sync help` for usage and setup steps.
 set -euo pipefail
 
 CONF_DIR="$HOME/.config/dev-sync"
@@ -254,7 +235,49 @@ cmd_unschedule() {
     log "unscheduled"
 }
 
-usage() { sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() {
+    cat <<'HELP'
+dev-sync: encrypted backup/restore of work-only files kept out of the public dotfiles.
+
+Usage: dev-sync <command> [--force] [--quiet]
+
+Commands:
+  backup       tar + encrypt the files below and copy them to DEV_SYNC_DEST.
+               The previous archive is kept as dev-sync.tar.gz.enc.prev. Refuses to
+               replace a backup this machine has never restored (override: --force).
+  restore      copy the archive from DEV_SYNC_DEST, decrypt, unpack into $HOME.
+               Files that would be overwritten are moved to ~/.dev-sync-backup/<time>/.
+  list         show the files a backup would include
+  schedule     daily backup at 13:00 (launchd on macOS, cron elsewhere); needs a passfile
+  unschedule   remove the daily backup
+  help         this text
+
+What is backed up (paths relative to $HOME; missing ones are skipped):
+  .zshrc.local  .zprofile.local  .gitconfig.local  .config/dev-sync/manifest
+  plus every path listed in ~/.config/dev-sync/manifest, one per line ('#' = comment).
+
+Setup on the machine that has the files:
+  1. Create ~/.config/dev-sync/config:
+       DEV_SYNC_DEST=host:dir            # [user@]host:dir (rsync/scp) or a local/synced folder
+       DEV_SYNC_PASSFILE=~/.config/dev-sync/passphrase   # chmod 600; only needed for `schedule`
+  2. Add extra paths to ~/.config/dev-sync/manifest, then check with: dev-sync list
+  3. dev-sync backup        (asks for a passphrase twice; remember it, it cannot be recovered)
+  4. dev-sync schedule      (optional)
+
+Setup on a new machine (after installing the dotfiles with .term-init.sh):
+  DEV_SYNC_DEST=<same destination> ~/.local/bin/dev-sync restore
+  The config file is itself not in the archive, so pass the destination in the environment
+  (or recreate the config). The manifest comes back with the restore.
+
+Environment (overrides the config file):
+  DEV_SYNC_DEST        where the archive lives
+  DEV_SYNC_PASSFILE    file holding the passphrase
+  DEV_SYNC_PASSPHRASE  the passphrase itself (otherwise the passfile, else you are prompted)
+
+Flags: --force  allow `backup` to replace a backup this machine never restored
+       --quiet  print only errors (used by the scheduled job)
+HELP
+}
 
 cmd=${1:-help}
 if [ $# -gt 0 ]; then shift; fi
