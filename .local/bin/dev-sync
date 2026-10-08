@@ -3,6 +3,8 @@
 # in the (public) dotfiles repo.
 #
 #   dev-sync backup       tar + encrypt the files in the manifest, push to $DEV_SYNC_DEST
+#                          (the previous archive is kept as dev-sync.tar.gz.enc.prev; refuses
+#                          to replace a backup this machine has never restored, unless --force)
 #   dev-sync restore      pull from $DEV_SYNC_DEST, decrypt, unpack into $HOME
 #                          (files that would be overwritten are moved aside first)
 #   dev-sync list         show what the manifest resolves to
@@ -24,6 +26,7 @@ CONF_DIR="$HOME/.config/dev-sync"
 CONF_FILE="$CONF_DIR/config"
 MANIFEST="$CONF_DIR/manifest"
 CACHE_DIR="$HOME/.cache/dev-sync"
+SYNCED="$CACHE_DIR/synced"   # exists once this machine has restored or made a backup
 BACKUP_ROOT="$HOME/.dev-sync-backup"
 ARCHIVE="dev-sync.tar.gz.enc"
 LABEL="com.jnihal.dev-sync"
@@ -112,17 +115,19 @@ is_remote() {
     esac
 }
 
+# push <file> [remote-name]
 push() {
+    local name=${2:-$ARCHIVE}
     if is_remote; then
         if command -v rsync >/dev/null 2>&1; then
-            rsync -q "$1" "${DEST%/}/$ARCHIVE"
+            rsync -q "$1" "${DEST%/}/$name"
         else
-            scp -q "$1" "${DEST%/}/$ARCHIVE"
+            scp -q "$1" "${DEST%/}/$name"
         fi
     else
         mkdir -p "$DEST"
-        cp "$1" "$DEST/.$ARCHIVE.tmp"
-        mv "$DEST/.$ARCHIVE.tmp" "$DEST/$ARCHIVE"
+        cp "$1" "$DEST/.$name.tmp"
+        mv "$DEST/.$name.tmp" "$DEST/$name"
     fi
 }
 
@@ -148,14 +153,21 @@ cmd_backup() {
     need_dest
     resolve_entries
     [ ${#FILES[@]} -gt 0 ] || die "nothing to back up"
-    get_pass confirm
     umask 077
     mkdir -p "$CACHE_DIR"
-    local out="$CACHE_DIR/$ARCHIVE"
+    local out="$CACHE_DIR/$ARCHIVE" prev="$CACHE_DIR/$ARCHIVE.prev" have_prev=0
+    rm -f "$prev"
+    if (pull "$prev") >/dev/null 2>&1; then have_prev=1; fi
+    if [ "$have_prev" -eq 1 ] && [ ! -e "$SYNCED" ] && [ -z "${FORCE:-}" ]; then
+        die "a backup already exists at $DEST/$ARCHIVE but this machine has not restored it; run 'dev-sync restore' first, or 'dev-sync backup --force' to replace it"
+    fi
+    get_pass confirm
     COPYFILE_DISABLE=1 tar -C "$HOME" --exclude=.DS_Store -czf - -- "${FILES[@]}" \
         | ossl -out "$out.tmp"
     mv "$out.tmp" "$out"
+    if [ "$have_prev" -eq 1 ]; then push "$prev" "$ARCHIVE.prev"; fi
     push "$out"
+    touch "$SYNCED"
     log "backed up ${#FILES[@]} entries to $DEST/$ARCHIVE"
 }
 
@@ -191,6 +203,7 @@ cmd_restore() {
         n=$((n + 1))
     done < <(cd "$tmp/stage" && find . \( -type f -o -type l \))
 
+    mkdir -p "$CACHE_DIR"; touch "$SYNCED"
     log "restored $n files into $HOME"
     if [ -d "$bdir" ]; then log "previous versions saved in $bdir"; fi
 }
@@ -246,7 +259,10 @@ usage() { sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 cmd=${1:-help}
 if [ $# -gt 0 ]; then shift; fi
 for arg in "$@"; do
-    if [ "$arg" = --quiet ]; then QUIET=1; fi
+    case "$arg" in
+        --quiet) QUIET=1 ;;
+        --force) FORCE=1 ;;
+    esac
 done
 
 case "$cmd" in

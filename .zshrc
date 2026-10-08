@@ -27,7 +27,7 @@ alias dotfile="git --git-dir=$HOME/.dotfiles --work-tree=$HOME"
 [[ $ZSH_THEME == powerlevel10k/* && -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 
 # setup fzf
-(( $+commands[fzf] )) && source <(fzf --zsh)
+(( $+commands[fzf] )) && fzf --zsh >/dev/null 2>&1 && source <(fzf --zsh)   # needs fzf >= 0.48
 
 # share zsh history
 HISTFILE=~/.zsh_history
